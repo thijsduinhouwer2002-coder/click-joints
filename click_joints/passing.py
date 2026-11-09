@@ -1,0 +1,202 @@
+"""Passingcontrole met een BVH-tree: wanddikte rond de kom en uitsteken uit het figuur."""
+import math
+
+from mathutils import Vector
+
+GRENS_ROOD_MM = 0.8    # dunner dan dit: te dun om te printen
+GRENS_ORANJE_MM = 1.5  # dunner dan dit: krap
+# Kleuren van Daan (lineair, zoals Blender ze opslaat). Beoordeling 2 (8 nov 07:35): Tight is verzadigd
+# citroengeel #FFEA00, want in Solid komt geen kleur boven ±#AE en alleen een geel zonder wit blijft geel
+# (#FFD23F werd mosterd). Groen is iets blauwer, #00D696: dezelfde tint als #00C389 (advies controleur, voor wie
+# geen groen ziet), maar even helder als het oude groen #3DDC84, omdat Solid alles al donkerder maakt.
+# Rood #FF4D4D. Naast de kleur staat in het paneel altijd een icoon (kleurenblind).
+KLEUREN = {"groen": (0.0, 0.672, 0.305, 1.0), "oranje": (1.0, 0.823, 0.0, 1.0),
+           "rood": (1.0, 0.074, 0.074, 1.0)}
+ICONEN = {"groen": "CHECKMARK", "oranje": "ERROR", "rood": "CANCEL"}
+
+
+AUTO_FACTOR = 0.6     # standaard kogelmaat: 60% van de smalste breedte op de snede (punt 9 van Daan)
+AUTO_STAP_MM = 0.5
+AUTO_MIN_MM = 2.0
+AUTO_MAX_MM = 50.0    # gelijk aan het maximum van de instelling Diameter
+
+
+def smalste_breedte(bvh, frame, n=36):
+    """Smalste breedte van het figuur in het snijvlak (Blender-eenheden), of None als het punt buiten
+    het figuur ligt. Per richting in het vlak: afstand naar voren plus afstand naar achteren."""
+    o = frame.translation
+    if not binnen(bvh, o):
+        return None
+    rot = frame.to_3x3()
+    kleinste = math.inf
+    for i in range(n):
+        hoek = math.pi * i / n  # halve cirkel: elke richting telt met zijn tegenovergestelde
+        d = (rot @ Vector((math.cos(hoek), math.sin(hoek), 0))).normalized()
+        voor, achter = bvh.ray_cast(o, d), bvh.ray_cast(o, -d)
+        if voor[0] is None or achter[0] is None:
+            return None
+        kleinste = min(kleinste, voor[3] + achter[3])
+    return kleinste
+
+
+def grootste_straal(bvh, frame, hoogtes, n=36):
+    """Grootste afstand van de as tot de huid (eerste treffer per richting) op de gegeven hoogtes in het
+    gewrichtsframe, in Blender-eenheden; None als een straal niets raakt."""
+    rot = frame.to_3x3()
+    grootste = 0.0
+    for z in hoogtes:
+        o = frame @ Vector((0, 0, z))
+        for i in range(n):
+            hoek = 2 * math.pi * i / n
+            hit = bvh.ray_cast(o, (rot @ Vector((math.cos(hoek), math.sin(hoek), 0))).normalized())
+            if hit[0] is None:
+                return None
+            grootste = max(grootste, hit[3])
+    return grootste
+
+
+def auto_diameter(breedte_mm):
+    """0,6 keer de breedte, afgerond op 0,5 mm, tussen 2 en 50 mm."""
+    d = round(AUTO_FACTOR * breedte_mm / AUTO_STAP_MM) * AUTO_STAP_MM
+    return min(max(d, AUTO_MIN_MM), AUTO_MAX_MM)
+
+
+def richtingen(n):
+    """n richtingen gelijk verdeeld over een bol (Fibonacci)."""
+    uit = []
+    gouden = math.pi * (3 - math.sqrt(5))
+    for i in range(n):
+        z = 1 - 2 * (i + 0.5) / n
+        r = math.sqrt(1 - z * z)
+        uit.append(Vector((r * math.cos(i * gouden), r * math.sin(i * gouden), z)))
+    return uit
+
+
+def ring(n=24):
+    return [Vector((math.cos(2 * math.pi * i / n), math.sin(2 * math.pi * i / n), 0)) for i in range(n)]
+
+
+def binnen(bvh, p):
+    loc, nor, _, _ = bvh.find_nearest(p)
+    return loc is not None and (p - loc).dot(nor) < 0
+
+
+def monsters(maat, soort):
+    """Lijst (oorsprong, richting, nodige afstand, opening) in het gewrichtsframe.
+    Een monster met opening houdt ook rekening met het snijvlak (de bodem van deel B)."""
+    lijst = []
+    if soort == "KOGEL":
+        c = Vector((0, 0, maat["midden_z"]))
+        for d in richtingen(400):
+            lijst.append((c, d, maat["r"] + maat["s"], maat["open_r"]))
+        for d in ring():
+            lijst.append((Vector((0, 0, maat["schuif"] * 2)), d, maat["open_r"], None))
+    else:
+        top = maat["top_z"]
+        for i in range(6):
+            o = Vector((0, 0, top * i / 5))
+            for d in ring():
+                lijst.append((o, d, maat["r"] + maat["s"], None))
+        lijst.append((Vector((0, 0, top)), Vector((0, 0, 1)), maat["s"], None))
+    return lijst
+
+
+def bodem(maat):
+    """Dikte van de rand van deel B tussen snijvlak en kom, net naast de klikopening.
+    Vorm v0.3 (met bolnaad): de schil van deel B tussen kom en bolnaad."""
+    rk = maat["r"] + maat["s"]
+    if "naad_r" in maat:
+        return maat["naad_r"] - maat["s"] / 2 - rk
+    return maat["midden_z"] - math.sqrt(max(rk * rk - maat["open_r"] ** 2, 0.0)) - maat["schuif"]
+
+
+def beoordeel(bvh, frame, maat, soort, eenheid_per_mm):
+    """Geeft (kleur, kleinste wand in mm, uitleg)."""
+    rot = frame.to_3x3()
+    for o in ((0, 0, maat["schuif"] * 2), (0, 0, maat["midden_z"])):
+        if not binnen(bvh, frame @ Vector(o)):
+            return "rood", -1.0, "the joint sticks out of the mesh"
+    kleinste = bodem(maat) if soort == "KOGEL" else math.inf
+    for o, d, nodig, opening in monsters(maat, soort):
+        afstand = math.inf
+        if opening is not None and d.z < 0:
+            uit = o + d * nodig
+            if math.hypot(uit.x, uit.y) < opening:
+                continue  # deze straal gaat door de klikopening
+            if "naad_r" in maat:
+                afstand = maat["naad_r"] - maat["s"] / 2  # tot de bolnaad: daar eindigt deel B
+            else:
+                afstand = (o.z - maat["schuif"]) / -d.z  # tot het snijvlak: de bodem van deel B
+        hit = bvh.ray_cast(frame @ o, (rot @ d).normalized())
+        if hit[0] is None:
+            return "rood", -1.0, "the joint sticks out of the mesh"
+        kleinste = min(kleinste, min(hit[3], afstand) - nodig)
+    if soort == "KOGEL" and "naad_r" in maat:
+        kleinste = min(kleinste, trechter_wand(bvh, frame, maat))
+    wand = kleinste / eenheid_per_mm
+    if wand < GRENS_ROOD_MM:
+        return "rood", wand, f"wall {wand:.2f} mm is too thin (minimum {GRENS_ROOD_MM} mm)"
+    if wand < GRENS_ORANJE_MM:
+        return "oranje", wand, f"wall {wand:.2f} mm is tight (aim for {GRENS_ORANJE_MM} mm or more)"
+    return "groen", wand, f"wall {wand:.2f} mm"
+
+
+def trechter_eind(open_r, lip, tan_a, grens):
+    """Afstand t langs de trechter (vanaf de klikrand) waar de trechter de bolnaad raakt:
+    (open_r + t tan a)^2 + (lip + t)^2 = grens^2, de positieve wortel."""
+    qa = tan_a * tan_a + 1.0
+    qb = 2.0 * (open_r * tan_a + lip)
+    qc = open_r * open_r + lip * lip - grens * grens
+    D = qb * qb - 4.0 * qa * qc
+    if D < 0:
+        return 0.0
+    return max(0.0, (-qb + math.sqrt(D)) / (2.0 * qa))
+
+
+def trechter_wand(bvh, frame, maat, n=48):
+    """Vorm v0.3: wand van deel B tussen de trechter (onder de klikrand) en de huid, loodrecht op de
+    trechterwand gemeten, van de klikrand tot en met het punt waar de trechter de bolnaad raakt.
+    Daar is de wand vaak het dunst, dus dat eindpunt wordt altijd gemeten (controleur ronde j)."""
+    rot = frame.to_3x3()
+    a = math.radians(maat["trechter_graden"])
+    mz, open_r, lip = maat["midden_z"], maat["open_r"], maat["lip_d"]
+    grens = maat["naad_r"] - maat["s"] / 2
+    eind = trechter_eind(open_r, lip, math.tan(a), grens)
+    stappen = max(1, math.ceil(eind / (maat["r"] * 0.05)))
+    kleinste = math.inf
+    for k in range(stappen + 1):
+        t = eind * k / stappen
+        z = mz - lip - t
+        x = open_r + t * math.tan(a)
+        for d in ring(n):
+            p = Vector((d.x * x, d.y * x, z))
+            normaal = Vector((d.x * math.cos(a), d.y * math.cos(a), math.sin(a)))
+            hit = bvh.ray_cast(frame @ p, (rot @ normaal).normalized())
+            if hit[0] is None:
+                return -1.0
+            kleinste = min(kleinste, hit[3])
+    return kleinste
+
+
+def fit_tekst(kleur, wand):
+    """Engelse passingtekst voor het paneel, met de oorzaak bij Tight en Too thin."""
+    if kleur == "groen":
+        return "Good fit"
+    if kleur == "oranje":
+        return f"Tight: wall {wand:.2f} mm (aim for {GRENS_ORANJE_MM} mm or more)"
+    if wand < 0:
+        return "Too thin: joint sticks out of the mesh"
+    return f"Too thin: wall {wand:.2f} mm (minimum {GRENS_ROOD_MM} mm)"
+
+
+def meet_speling(deel_kogel, bvh_kom, centrum, r, as_richting, tol):
+    """Afstanden van punten op de kogel naar het dichtstbijzijnde vlak van het komdeel."""
+    afst = []
+    for v in deel_kogel.data.vertices:
+        p = deel_kogel.matrix_world @ v.co
+        rel = p - centrum
+        if abs(rel.length - r) < tol and rel.dot(as_richting) > -0.4 * r:
+            hit = bvh_kom.find_nearest(p)
+            if hit[0] is not None:
+                afst.append(hit[3])
+    return afst
