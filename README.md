@@ -11,7 +11,9 @@ For a ball joint it measures how far the joint bends before the parts collide, i
 - Exploded view; the export stays in place
 - "Make watertight" for open or messy meshes, on a copy
 - Export as STL or 3MF, one file per part, in millimetres
-- Tested on Blender 4.2 LTS and 5.2 LTS
+- Tested on Blender 4.2 LTS, 5.2 LTS and 5.3
+
+Current version: 0.1.1 (a joint in one knee no longer cuts through the other leg).
 
 ## Install
 
