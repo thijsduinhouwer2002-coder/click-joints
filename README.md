@@ -19,6 +19,14 @@ Current version: 0.1.1 (a joint in one knee no longer cuts through the other leg
 
 Get it from the Blender Extensions platform (Edit > Preferences > Get Extensions, search "Click Joints"), or download the zip from the releases and use Install from Disk.
 
+## Click Joints Pro
+
+Need knees and elbows that bend one way and stop? Click Joints Pro adds a printable click hinge with an end stop at 90°, 115° or 135°, a pose slider per hinge, red marks on both parts when you pose past the stop, and spacing checks. Everything in the free version is included.
+
+Personal license $12, studio license (up to 5 people) $45, all Pro 1.x updates included: https://duinhouwer8.gumroad.com/l/click-joints-pro
+
+The free Click Joints stays free and keeps getting fixes.
+
 ## Report a problem
 
 Open an issue here: https://github.com/thijsduinhouwer2002-coder/click-joints/issues
